@@ -1,0 +1,8 @@
+#pragma once
+
+#include <stdexcept>
+#include <string_view>
+
+struct format_context_error : public std::runtime_error {
+    format_context_error(std::string_view msg) : std::runtime_error(std::string{msg}) {}
+};
