@@ -1,6 +1,4 @@
-
-
-#include <stdexcept>
+#include <iostream>
 extern "C" {
     #include <libavcodec/packet.h>
     #include <libavutil/frame.h>
@@ -12,53 +10,50 @@ extern "C" {
 #include "packet.hpp"
 
 constexpr const char* INPUT = "edit.mp4";
-constexpr const char* OUTPUT = "tmuxed_edit.ts";
+constexpr const char* OUTPUT = "tmuxed_edit.mov";
 
-int main() {
-    InputFormatContext input_ctx;
-    OutputFormatContext output_ctx;
+void remux(std::string_view input, std::string_view output) {
+    InputFormatContext ictx{};
+    OutputFormatContext octx;
 
-    input_ctx.open_input(INPUT);
-    input_ctx.find_best_stream_info();
+    ictx.open_input(INPUT);
+    ictx.find_best_stream_info();
 
-    output_ctx.alloc_output(OUTPUT);
+    octx.alloc_output(output);
 
-    std::vector<AVStream*> i_streams = input_ctx.streams();
-    for (auto i = 0; i < i_streams.size(); ++i) {
-        AVStream* in_stream = i_streams[i];
-        StreamT out_stream = output_ctx.new_stream();
-        if (!out_stream) {
-            throw std::runtime_error("Could not create a fucking stream");
-        }
-        int ret = avcodec_parameters_copy(out_stream->codecpar, in_stream->codecpar);
-        if (ret < 0) {
-            throw std::runtime_error("Could not copy parameters");
-        }
-        out_stream->codecpar->codec_tag = 0;
+    std::vector<AVStream*> streams = ictx.streams();
+    std::size_t streams_sz = streams.size();
+    std::cout << "Streams " << streams.size() << "\n";
+    for (auto i = 0; i < streams_sz; ++i) {
+        AVStream* istream = streams[i];
+        StreamT ostream = octx.new_stream();
+        avcodec_parameters_copy(ostream->codecpar, istream->codecpar);
+        ostream->codecpar->codec_tag = 0;
     }
 
-    av_dump_format(output_ctx.get_inner(), 0, OUTPUT, true);
+    octx.open_output(output, AVIO_FLAG_WRITE);
+    octx.write_header();
 
-    output_ctx.open_output(OUTPUT, AVIO_FLAG_WRITE);
-    output_ctx.write_header();
-
-    auto o_streams = output_ctx.streams();
     Packet pkt;
+    std::vector<AVStream*> ostreams = octx.streams();
     while (true) {
-        int ret = input_ctx.read_raw_frame(pkt);
-        if (ret < 0) {
+        int res = ictx.read_raw_frame(pkt);
+        if (res < 0) {
             break;
         }
 
-        int cur_idx = pkt.stream_index();
-        auto* i_stream = i_streams[cur_idx];
-        auto* o_stream = o_streams[cur_idx];
+        int stream_index = pkt.stream_index();
+        AVStream* istream = streams[stream_index];
+        AVStream* ostream = ostreams[stream_index];
 
-        pkt.rescale_ts(i_stream->time_base, o_stream->time_base);
-
-        output_ctx.write_frame_interleaved(pkt);
+        pkt.rescale_ts(istream->time_base, ostream->time_base);
+        octx.write_frame_interleaved(pkt);
     }
+    
+    octx.write_trailer();
+}
 
-    output_ctx.write_trailer();
+int main() {
+    remux(INPUT, OUTPUT);
     return 0;
 }

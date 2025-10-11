@@ -38,10 +38,14 @@ public:
 };
 
 class InputFormatContext : public FormatContextBase {
-    AVFormatContext* m_ctx{nullptr};
     bool m_is_open_input{false};
 public:
-    InputFormatContext() = default;
+    InputFormatContext() {
+        m_ctx = avformat_alloc_context();
+        if (!m_ctx) {
+            throw std::bad_alloc{};
+        }
+    }
     ~InputFormatContext() override {
         free_context();
     }
@@ -49,7 +53,6 @@ public:
         if (m_is_open_input) {
             close_input();
         }
-        avformat_free_context(m_ctx);
     }
 
     // input output
@@ -92,7 +95,6 @@ public:
         if (m_is_open_output) {
             close_output();
         }
-        avformat_free_context(m_ctx);
     }
 
 
