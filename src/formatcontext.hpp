@@ -1,6 +1,4 @@
 #pragma once
-#include <libavformat/avio.h>
-#include <libavutil/dict.h>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -10,6 +8,8 @@
 #include "stream.hpp"
 #include "packet.hpp"
 extern "C" {
+    #include <libavformat/avio.h>
+    #include <libavutil/dict.h>
     #include <libavformat/avformat.h>
 }
 

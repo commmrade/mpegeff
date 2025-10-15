@@ -1,4 +1,4 @@
-
+#pragma once
 #include <new>
 #include "exceptions.hpp"
 #include "frame.hpp"
