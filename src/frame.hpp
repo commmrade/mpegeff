@@ -6,7 +6,7 @@ extern "C" {
 }
 
 class Frame {
-    AVFrame* m_frame;
+    AVFrame* m_frame{nullptr};
 public:
     Frame() {
         m_frame = av_frame_alloc();

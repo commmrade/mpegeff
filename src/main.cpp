@@ -16,6 +16,7 @@ extern "C" {
 #include "stream.hpp"
 #include "packet.hpp"
 #include "frame.hpp"
+#include "codeccontext.hpp"
 
 constexpr const char* INPUT = "edit.mp4";
 constexpr const char* OUTPUT = "tmuxed_edit.mov";
@@ -71,8 +72,8 @@ struct IContext {
     int astream_idx{};
     int vstream_idx{};
 
-    AVCodecContext* audio_ctx{nullptr};
-    AVCodecContext* video_ctx{nullptr};
+    std::unique_ptr<CodecContext> audio_ctx{nullptr};
+    std::unique_ptr<CodecContext> video_ctx{nullptr};
 
     AVStream* audio_stream{nullptr};
     AVStream* video_stream{nullptr};
@@ -89,11 +90,11 @@ struct OContext {
     int astream_idx{};
     int vstream_idx{};
 
-    AVCodecContext* audio_ctx{nullptr};
-    AVCodecContext* video_ctx{nullptr};
+    std::unique_ptr<CodecContext> audio_ctx{nullptr};
+    std::unique_ptr<CodecContext> video_ctx{nullptr};
 
-    AVStream* audio_stream{nullptr};
-    AVStream* video_stream{nullptr};
+    StreamT audio_stream{nullptr};
+    StreamT video_stream{nullptr};
 
     const AVCodec* audio_codec{nullptr};
     const AVCodec* video_codec{nullptr};
@@ -102,20 +103,13 @@ struct OContext {
 #define handleError(cond, msg) if (cond) { throw std::runtime_error(msg); }
 
 void transcode(std::string_view input, std::string_view output, IContext& ictx, OContext& octx) {
-    ictx.fmt_ctx = avformat_alloc_context();
-    handleError(!ictx.fmt_ctx, "Alloc fmt ctx");
-    // ictx.fmt_ctx.open_input(ictx.filepath);
-    // ictx.fmt_ctx.find_best_stream_info();
+    ictx.fmt_ctx.open_input(ictx.filepath);
+    ictx.fmt_ctx.find_best_stream_info();
 
-    int r = avformat_open_input(&ictx.fmt_ctx, ictx.filepath.c_str(), NULL, NULL);
-    handleError(r < 0, "Open input");
-
-    r = avformat_find_stream_info(ictx.fmt_ctx, NULL);
-    handleError(r < 0, "Find stream info");
-
-    int n_streams = ictx.fmt_ctx->nb_streams;
-    for (auto i = 0; i < n_streams; ++i) {
-        AVCodecParameters* cparams = ictx.fmt_ctx->streams[i]->codecpar;
+    int r = 0;
+    std::vector<AVStream*> istreams = ictx.fmt_ctx.streams();
+    for (auto i = 0; i < istreams.size(); ++i) {
+        AVCodecParameters* cparams = istreams[i]->codecpar;
         const AVCodec* codec = avcodec_find_decoder(cparams->codec_id);
         handleError(!codec, "Find decoder")
 
@@ -123,118 +117,94 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
             ictx.astream_idx = i;
             ictx.audio_codec = codec;
 
-            ictx.audio_ctx = avcodec_alloc_context3(codec);
-            handleError(!ictx.audio_ctx, "Alloc context3");
-            r = avcodec_parameters_to_context(ictx.audio_ctx, cparams);
-            r = avcodec_open2(ictx.audio_ctx, codec, NULL);
-            handleError(r < 0, "Open codec");
+            ictx.audio_ctx = std::make_unique<CodecContext>(codec);
+            ictx.audio_ctx->copy_params_from(cparams);
+            ictx.audio_ctx->open(codec);
         } else if (cparams->codec_type == AVMEDIA_TYPE_VIDEO) {
             ictx.vstream_idx = i;
             ictx.video_codec = codec;
 
-            ictx.video_ctx = avcodec_alloc_context3(codec);
-            handleError(!ictx.video_ctx, "Alloc video ctx");
-            avcodec_parameters_to_context(ictx.video_ctx, cparams);
-            r = avcodec_open2(ictx.video_ctx, codec, NULL);
-            handleError(r < 0, "Open v codec");
+            ictx.video_ctx = std::make_unique<CodecContext>(codec);
+            ictx.video_ctx->copy_params_from(cparams);
+            ictx.video_ctx->open(codec);
         }
     }
 
-
-    r = avformat_alloc_output_context2(&octx.fmt_ctx, NULL, NULL, octx.filepath.c_str());
-    handleError(r < 0, "Alloc output ctx");
+    octx.fmt_ctx.alloc_output(octx.filepath);
 
     // Setup encoder
-    for (auto i = 0; i < n_streams; ++i) {
-        AVStream* i_stream = ictx.fmt_ctx->streams[i];
+    for (auto i = 0; i < istreams.size(); ++i) {
+        AVStream* i_stream = istreams[i];
         int media_type = i_stream->codecpar->codec_type;
         if (media_type == AVMEDIA_TYPE_AUDIO) {
-            // Mux audio
-            
-            AVStream* o_stream = avformat_new_stream(octx.fmt_ctx, NULL);
-            handleError(!o_stream, "New stram audio");
+            StreamT o_stream = octx.fmt_ctx.new_stream();
             octx.audio_stream = o_stream;
             octx.astream_idx = i;
             avcodec_parameters_copy(o_stream->codecpar, i_stream->codecpar);
         } else if (media_type == AVMEDIA_TYPE_VIDEO) {
             octx.vstream_idx = i;
-            AVStream* o_stream = avformat_new_stream(octx.fmt_ctx, NULL);
-            handleError(!o_stream, "New stream video");
+            StreamT o_stream = octx.fmt_ctx.new_stream();
             octx.video_stream = o_stream;
             
             const AVCodec* codec = avcodec_find_encoder_by_name("libx265");
             handleError(!codec, "Find encoder");
             octx.video_codec = codec;
 
-            AVCodecContext* video_ctx = avcodec_alloc_context3(codec);
-            handleError(!video_ctx, "Could not alloc audio ctx");
-
-
-            octx.video_ctx = video_ctx;
+            // AVCodecContext* video_ctx = avcodec_alloc_context3(codec);
+            // handleError(!video_ctx, "Could not alloc audio ctx");
+            octx.video_ctx = std::make_unique<CodecContext>(codec);
             
-            octx.video_ctx->bit_rate = ictx.video_ctx->bit_rate;
-            octx.video_ctx->time_base = av_inv_q(ictx.video_ctx->framerate);
-            octx.video_ctx->height = ictx.video_ctx->height;
-            octx.video_ctx->width = ictx.video_ctx->width;
-            octx.video_ctx->pix_fmt = ictx.video_ctx->pix_fmt;
+            octx.video_ctx->get_inner()->bit_rate = ictx.video_ctx->get_inner()->bit_rate;
+            octx.video_ctx->get_inner()->time_base = av_inv_q(ictx.video_ctx->get_inner()->framerate);
+            octx.video_ctx->get_inner()->height = ictx.video_ctx->get_inner()->height;
+            octx.video_ctx->get_inner()->width = ictx.video_ctx->get_inner()->width;
+            octx.video_ctx->get_inner()->pix_fmt = ictx.video_ctx->get_inner()->pix_fmt;
 
-            r = avcodec_open2(video_ctx, codec, NULL);
-            handleError(r < 0, "Open codec encoder");
-            r = avcodec_parameters_from_context(o_stream->codecpar, video_ctx);
-            handleError(r < 0, "Copy parameters");
+            octx.video_ctx->open(codec);
+            octx.video_ctx->paste_params_to(o_stream->codecpar);
         }
     }
 
-    r = avio_open(&octx.fmt_ctx->pb, octx.filepath.c_str(), AVIO_FLAG_WRITE);
-    handleError(r < 0, "Open avio")
-
-    r = avformat_write_header(octx.fmt_ctx, NULL);
-    handleError(r < 0, "Write header");
-
-    // av_dump_format(octx.fmt_ctx, 0, 0, true);
+    octx.fmt_ctx.open_output(octx.filepath, AVIO_FLAG_WRITE);
+    octx.fmt_ctx.write_header();
 
     Packet pkt;
-    // handleError(!pkt, "Could not pkt alloc");
-    // AVFrame* frame = av_frame_alloc();
     Frame frame;
 
-    while (av_read_frame(ictx.fmt_ctx, pkt.get_inner()) >= 0) {
+    std::vector<AVStream*> ostreams = octx.fmt_ctx.streams();
+    while (ictx.fmt_ctx.read_raw_frame(pkt) >= 0) {
         int stream_index = pkt.stream_index();
         if (stream_index == ictx.astream_idx) {
-            AVStream* is = ictx.fmt_ctx->streams[ictx.astream_idx];
-            AVStream* os = octx.fmt_ctx->streams[octx.astream_idx];
-            // av_packet_rescale_ts(pkt, is->time_base, os->time_base);
+            AVStream* is = istreams[ictx.astream_idx];
+            AVStream* os = ostreams[octx.astream_idx];
             pkt.rescale_ts(is->time_base, os->time_base);
-            // pkt->stream_index = octx.astream_idx;
             pkt.set_stream_index(octx.astream_idx);
 
-            av_interleaved_write_frame(octx.fmt_ctx, pkt.get_inner());
+            octx.fmt_ctx.write_frame_interleaved(pkt);
         } else if (stream_index == ictx.vstream_idx) {
-            AVStream* is = ictx.fmt_ctx->streams[ictx.vstream_idx];
-            AVStream* os = octx.fmt_ctx->streams[octx.vstream_idx];
+            AVStream* is = istreams[ictx.vstream_idx];
+            AVStream* os = ostreams[octx.vstream_idx];
 
-            r = avcodec_send_packet(ictx.video_ctx, pkt.get_inner());
+            r = ictx.video_ctx->send_packet(pkt);
             handleError(r < 0, "Decode packet");
 
-            while ((r = avcodec_receive_frame(ictx.video_ctx, frame.get_inner())) >= 0) {
-
-                r = avcodec_send_frame(octx.video_ctx, frame.get_inner());
+            while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
+                r = octx.video_ctx->send_frame(frame);
                 handleError(r < 0, "Encode frame");
 
-                while ((r = avcodec_receive_packet(octx.video_ctx, pkt.get_inner())) >= 0) {
+                while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
                     pkt.rescale_ts(is->time_base, os->time_base);
                     pkt.set_stream_index(octx.vstream_idx);
 
-                    av_interleaved_write_frame(octx.fmt_ctx, pkt.get_inner());
+                    octx.fmt_ctx.write_frame_interleaved(pkt);
                 }
                 frame.unref();
             }
         }   
-        // r = avcodec_send_packet(ictx.c, pkt);
-
+        // TODO: FLush decoder encoder yada yada
     }
 
-    r = av_write_trailer(octx.fmt_ctx);
+    octx.fmt_ctx.write_trailer();
 }
 
 

@@ -6,7 +6,7 @@ extern "C" {
 }
 
 class Packet {
-    AVPacket* m_pkt;
+    AVPacket* m_pkt{nullptr};
 public:
     Packet(AVPacket* pkt) : m_pkt(pkt) 
     {}
