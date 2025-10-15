@@ -15,6 +15,7 @@ extern "C" {
 #include "formatcontext.hpp"
 #include "stream.hpp"
 #include "packet.hpp"
+#include "frame.hpp"
 
 constexpr const char* INPUT = "edit.mp4";
 constexpr const char* OUTPUT = "tmuxed_edit.mov";
@@ -61,8 +62,27 @@ void remux(std::string_view input, std::string_view output) {
 }
 
 
-struct Context {
-    AVFormatContext* fmt_ctx{nullptr};
+struct IContext {
+    // AVFormatContext* fmt_ctx{nullptr};
+    InputFormatContext fmt_ctx;
+
+    std::string filepath{};
+
+    int astream_idx{};
+    int vstream_idx{};
+
+    AVCodecContext* audio_ctx{nullptr};
+    AVCodecContext* video_ctx{nullptr};
+
+    AVStream* audio_stream{nullptr};
+    AVStream* video_stream{nullptr};
+
+    const AVCodec* audio_codec{nullptr};
+    const AVCodec* video_codec{nullptr};
+};
+
+struct OContext {
+    OutputFormatContext fmt_ctx;
 
     std::string filepath{};
 
@@ -81,9 +101,11 @@ struct Context {
 
 #define handleError(cond, msg) if (cond) { throw std::runtime_error(msg); }
 
-void transcode(std::string_view input, std::string_view output, Context& ictx, Context& octx) {
+void transcode(std::string_view input, std::string_view output, IContext& ictx, OContext& octx) {
     ictx.fmt_ctx = avformat_alloc_context();
     handleError(!ictx.fmt_ctx, "Alloc fmt ctx");
+    // ictx.fmt_ctx.open_input(ictx.filepath);
+    // ictx.fmt_ctx.find_best_stream_info();
 
     int r = avformat_open_input(&ictx.fmt_ctx, ictx.filepath.c_str(), NULL, NULL);
     handleError(r < 0, "Open input");
@@ -155,9 +177,6 @@ void transcode(std::string_view input, std::string_view output, Context& ictx, C
             octx.video_ctx->height = ictx.video_ctx->height;
             octx.video_ctx->width = ictx.video_ctx->width;
             octx.video_ctx->pix_fmt = ictx.video_ctx->pix_fmt;
-            // octx.video_ctx->rc_buffer_size = ictx.video_ctx->rc_buffer_size;
-            // octx.video_ctx->rc_max_rate = 2 * 1000 * 1000;
-            // octx.video_ctx->rc_min_rate = 2.5 * 1000 * 1000;
 
             r = avcodec_open2(video_ctx, codec, NULL);
             handleError(r < 0, "Open codec encoder");
@@ -172,43 +191,43 @@ void transcode(std::string_view input, std::string_view output, Context& ictx, C
     r = avformat_write_header(octx.fmt_ctx, NULL);
     handleError(r < 0, "Write header");
 
-    av_dump_format(octx.fmt_ctx, 0, 0, true);
+    // av_dump_format(octx.fmt_ctx, 0, 0, true);
 
-    AVPacket* pkt = av_packet_alloc();
-    handleError(!pkt, "Could not pkt alloc");
-    AVFrame* frame = av_frame_alloc();
-    handleError(!frame, "Could not alloc frae");
+    Packet pkt;
+    // handleError(!pkt, "Could not pkt alloc");
+    // AVFrame* frame = av_frame_alloc();
+    Frame frame;
 
-
-    while (av_read_frame(ictx.fmt_ctx, pkt) >= 0) {
-        int stream_index = pkt->stream_index;
+    while (av_read_frame(ictx.fmt_ctx, pkt.get_inner()) >= 0) {
+        int stream_index = pkt.stream_index();
         if (stream_index == ictx.astream_idx) {
             AVStream* is = ictx.fmt_ctx->streams[ictx.astream_idx];
             AVStream* os = octx.fmt_ctx->streams[octx.astream_idx];
-            av_packet_rescale_ts(pkt, is->time_base, os->time_base);
-            pkt->pos = -1;
-            pkt->stream_index = octx.astream_idx;
+            // av_packet_rescale_ts(pkt, is->time_base, os->time_base);
+            pkt.rescale_ts(is->time_base, os->time_base);
+            // pkt->stream_index = octx.astream_idx;
+            pkt.set_stream_index(octx.astream_idx);
 
-            av_interleaved_write_frame(octx.fmt_ctx, pkt);
+            av_interleaved_write_frame(octx.fmt_ctx, pkt.get_inner());
         } else if (stream_index == ictx.vstream_idx) {
             AVStream* is = ictx.fmt_ctx->streams[ictx.vstream_idx];
             AVStream* os = octx.fmt_ctx->streams[octx.vstream_idx];
 
-            r = avcodec_send_packet(ictx.video_ctx, pkt);
+            r = avcodec_send_packet(ictx.video_ctx, pkt.get_inner());
             handleError(r < 0, "Decode packet");
 
-            while ((r = avcodec_receive_frame(ictx.video_ctx, frame)) >= 0) {
+            while ((r = avcodec_receive_frame(ictx.video_ctx, frame.get_inner())) >= 0) {
 
-                r = avcodec_send_frame(octx.video_ctx, frame);
+                r = avcodec_send_frame(octx.video_ctx, frame.get_inner());
                 handleError(r < 0, "Encode frame");
 
-                while ((r = avcodec_receive_packet(octx.video_ctx, pkt)) >= 0) {
-                    av_packet_rescale_ts(pkt, is->time_base, os->time_base);
-                    pkt->pos = -1;
-                    pkt->stream_index = octx.vstream_idx;
+                while ((r = avcodec_receive_packet(octx.video_ctx, pkt.get_inner())) >= 0) {
+                    pkt.rescale_ts(is->time_base, os->time_base);
+                    pkt.set_stream_index(octx.vstream_idx);
 
-                    av_interleaved_write_frame(octx.fmt_ctx, pkt);
+                    av_interleaved_write_frame(octx.fmt_ctx, pkt.get_inner());
                 }
+                frame.unref();
             }
         }   
         // r = avcodec_send_packet(ictx.c, pkt);
@@ -221,9 +240,9 @@ void transcode(std::string_view input, std::string_view output, Context& ictx, C
 
 int main() {
     // remux(INPUT, OUTPUT);
-    Context i{};
+    IContext i{};
     i.filepath = "edit.mp4";
-    Context o{};
+    OContext o{};
     o.filepath = "svo.mp4";
     transcode("edit.mp4", "svo.mp4", i, o);
     return 0;

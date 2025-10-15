@@ -26,6 +26,9 @@ public:
     int stream_index() const {
         return m_pkt->stream_index;
     }
+    void set_stream_index(int idx) {
+        m_pkt->stream_index = idx;
+    }
 
     AVPacket* get_inner() {
         return m_pkt;
