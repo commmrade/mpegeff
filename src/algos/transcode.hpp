@@ -2,6 +2,7 @@
 #include "formatcontext.hpp"
 #include "codeccontext.hpp"
 #include <format>
+#include <iostream>
 
 struct IContext {
     // AVFormatContext* fmt_ctx{nullptr};
@@ -80,13 +81,47 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
             octx.audio_stream = o_stream;
             octx.astream_idx = i;
             avcodec_parameters_copy(o_stream->codecpar, i_stream->codecpar);
+
+
+            // StreamT o_stream = octx.fmt_ctx.new_stream();
+            // octx.audio_stream = o_stream;
+            // octx.astream_idx = i;
+        
+            // const char* encoder_name = "aac";
+            // const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
+            // handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
+
+            // octx.audio_codec = codec;
+
+            // octx.audio_ctx = std::make_unique<CodecContext>(codec);
+            // octx.audio_ctx->get_inner()->bit_rate = ictx.audio_ctx->get_inner()->bit_rate;
+            // octx.audio_ctx->get_inner()->time_base = AVRational{1, octx.audio_ctx->get_inner()->sample_rate};
+            // octx.audio_ctx->get_inner()->sample_rate = ictx.audio_ctx->get_inner()->sample_rate;
+        
+            // const AVSampleFormat* sf = NULL;
+            // const AVChannelLayout* cl = NULL;
+
+            // avcodec_get_supported_config(octx.audio_ctx->get_inner(), codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, (const void**)&sf, NULL);
+            // avcodec_get_supported_config(octx.audio_ctx->get_inner(), codec, AV_CODEC_CONFIG_CHANNEL_LAYOUT, 0, (const void**)&cl, NULL);
+            
+            // octx.audio_ctx->get_inner()->sample_fmt = *sf;
+            // if (cl) {
+            //     av_channel_layout_copy(&octx.audio_ctx->get_inner()->ch_layout, cl);
+            // } else {
+            //     av_channel_layout_default(&octx.audio_ctx->get_inner()->ch_layout, 2);
+            // }
+
+
+            // octx.audio_ctx->open(codec);
+            // octx.audio_ctx->paste_params_to(o_stream->codecpar);
         } else if (media_type == AVMEDIA_TYPE_VIDEO) {
             octx.vstream_idx = i;
             StreamT o_stream = octx.fmt_ctx.new_stream();
             octx.video_stream = o_stream;
             
-            const char* encoder_name = "libx265"; // TODO: CHange
-            const AVCodec* codec = avcodec_find_encoder_by_name("libx265");
+            // const char* encoder_name = "libaom-av1"; // TODO: CHange
+            const char* encoder_name = "libsvtav1";
+            const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
             handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
 
             octx.video_codec = codec;
@@ -106,6 +141,8 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
     octx.fmt_ctx.open_output(octx.filepath, AVIO_FLAG_WRITE);
     octx.fmt_ctx.write_header();
 
+    av_dump_format(octx.fmt_ctx.get_inner(), 0, octx.filepath.c_str(), true);
+
     Packet pkt;
     Frame frame;
 
@@ -119,6 +156,29 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
             pkt.set_stream_index(octx.astream_idx);
 
             octx.fmt_ctx.write_frame_interleaved(pkt);
+
+
+
+            // r = ictx.audio_ctx->send_packet(pkt);
+            // handle_transcode_error(r < 0, "Could not send packet to the decoder");
+
+            // while ((r = ictx.audio_ctx->receive_frame(frame)) >= 0) {
+            //     // if (frame.get_inner()->nb_samples > octx.audio_ctx->get_inner()->frame_size) {
+            //     //     frame.get_inner()->nb_samples = octx.audio_ctx->get_inner()->frame_size;
+            //     //     // std::cerr << "Skipping oversize frame\n";
+            //     //     // continue;
+            //     // }
+            //     r = octx.audio_ctx->send_frame(frame);
+            //     handle_transcode_error(r < 0, "Could not send frame to the encoder");
+
+            //     while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
+            //         pkt.rescale_ts(is->time_base, os->time_base);
+            //         pkt.set_stream_index(octx.astream_idx);
+
+            //         octx.fmt_ctx.write_frame_interleaved(pkt);
+            //     }
+            //     av_packet_unref(pkt.get_inner());
+            // }
         } else if (stream_index == ictx.vstream_idx) {
             AVStream* is = istreams[ictx.vstream_idx];
             AVStream* os = ostreams[octx.vstream_idx];
@@ -136,9 +196,11 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
 
                     octx.fmt_ctx.write_frame_interleaved(pkt);
                 }
+                av_packet_unref(pkt.get_inner());
                 frame.unref();
             }
         }   
+        av_packet_unref(pkt.get_inner());
     }
 
     // flush decoder
