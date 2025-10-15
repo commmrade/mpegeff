@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <iostream>
 #include <stdexcept>
+#include <format>
 extern "C" {
     #include <libavformat/avio.h>
     #include <libavutil/rational.h>
@@ -17,6 +18,8 @@ extern "C" {
 #include "packet.hpp"
 #include "frame.hpp"
 #include "codeccontext.hpp"
+#include "exceptions.hpp"
+
 
 constexpr const char* INPUT = "edit.mp4";
 constexpr const char* OUTPUT = "tmuxed_edit.mov";
@@ -100,8 +103,7 @@ struct OContext {
     const AVCodec* video_codec{nullptr};
 };
 
-#define handleError(cond, msg) if (cond) { throw std::runtime_error(msg); }
-
+#define handle_transcode_error(cond, msg) if (cond) { throw transcoding_error(msg); }
 void transcode(std::string_view input, std::string_view output, IContext& ictx, OContext& octx) {
     ictx.fmt_ctx.open_input(ictx.filepath);
     ictx.fmt_ctx.find_best_stream_info();
@@ -111,7 +113,7 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
     for (auto i = 0; i < istreams.size(); ++i) {
         AVCodecParameters* cparams = istreams[i]->codecpar;
         const AVCodec* codec = avcodec_find_decoder(cparams->codec_id);
-        handleError(!codec, "Find decoder")
+        handle_transcode_error(!codec, std::format("Could not find decoder for stream {}", i));
 
         if (cparams->codec_type == AVMEDIA_TYPE_AUDIO) {
             ictx.astream_idx = i;
@@ -146,14 +148,13 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
             StreamT o_stream = octx.fmt_ctx.new_stream();
             octx.video_stream = o_stream;
             
+            const char* encoder_name = "libx265"; // TODO: CHange
             const AVCodec* codec = avcodec_find_encoder_by_name("libx265");
-            handleError(!codec, "Find encoder");
+            handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
+
             octx.video_codec = codec;
 
-            // AVCodecContext* video_ctx = avcodec_alloc_context3(codec);
-            // handleError(!video_ctx, "Could not alloc audio ctx");
-            octx.video_ctx = std::make_unique<CodecContext>(codec);
-            
+            octx.video_ctx = std::make_unique<CodecContext>(codec);            
             octx.video_ctx->get_inner()->bit_rate = ictx.video_ctx->get_inner()->bit_rate;
             octx.video_ctx->get_inner()->time_base = av_inv_q(ictx.video_ctx->get_inner()->framerate);
             octx.video_ctx->get_inner()->height = ictx.video_ctx->get_inner()->height;
@@ -186,11 +187,11 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
             AVStream* os = ostreams[octx.vstream_idx];
 
             r = ictx.video_ctx->send_packet(pkt);
-            handleError(r < 0, "Decode packet");
+            handle_transcode_error(r < 0, "Could not send packet to the decoder");
 
             while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
                 r = octx.video_ctx->send_frame(frame);
-                handleError(r < 0, "Encode frame");
+                handle_transcode_error(r < 0, "Could not send frame to the encoder");
 
                 while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
                     pkt.rescale_ts(is->time_base, os->time_base);
@@ -201,8 +202,47 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
                 frame.unref();
             }
         }   
-        // TODO: FLush decoder encoder yada yada
     }
+
+    // flush decoder
+    r = ictx.audio_ctx->send_packet_flush();
+    handle_transcode_error(r < 0, "Could not send flush packet to the audio decoder");
+    while ((r = ictx.audio_ctx->receive_frame(frame)) >= 0) {
+        AVStream* is = istreams[ictx.astream_idx];
+        AVStream* os = ostreams[octx.astream_idx];
+        pkt.rescale_ts(is->time_base, os->time_base);
+        pkt.set_stream_index(octx.astream_idx);
+
+        octx.fmt_ctx.write_frame_interleaved(pkt);
+    }
+
+    AVStream* is = istreams[ictx.vstream_idx];
+    AVStream* os = ostreams[octx.vstream_idx];
+    r = ictx.video_ctx->send_packet_flush();
+    handle_transcode_error(r < 0, "Could not send flush packet to the video decoder")
+    while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
+        r = octx.video_ctx->send_frame(frame);
+        handle_transcode_error(r < 0, "Could not send frame to the encoder");
+
+        while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
+            pkt.rescale_ts(is->time_base, os->time_base);
+            pkt.set_stream_index(octx.vstream_idx);
+
+            octx.fmt_ctx.write_frame_interleaved(pkt);
+        }
+        frame.unref();
+    }
+
+    // flush encoder
+    r = octx.video_ctx->send_frame_flush();
+    handle_transcode_error(r < 0, "Could not send flush frame to the encoder");
+    while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
+        pkt.rescale_ts(is->time_base, os->time_base);
+        pkt.set_stream_index(octx.vstream_idx);
+
+        octx.fmt_ctx.write_frame_interleaved(pkt);
+    }
+
 
     octx.fmt_ctx.write_trailer();
 }

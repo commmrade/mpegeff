@@ -10,3 +10,7 @@ struct format_context_error : public std::runtime_error {
 struct cctx_error : public std::runtime_error {
     cctx_error(std::string_view msg) : std::runtime_error(std::string{msg}) {}
 };
+
+struct transcoding_error : public std::runtime_error {
+    transcoding_error(std::string_view msg) : std::runtime_error(std::string{msg}) {}
+};

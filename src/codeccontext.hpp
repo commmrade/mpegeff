@@ -23,12 +23,20 @@ public:
     int send_packet(const Packet& pkt) {
         return avcodec_send_packet(m_cctx, pkt.get_inner());
     }
+    int send_packet_flush() {
+        return avcodec_send_packet(m_cctx, NULL);
+    }
     int receive_frame(Frame& frame) {
         return avcodec_receive_frame(m_cctx, frame.get_inner());
     }
 
+    
+
     int send_frame(const Frame& frame) {
         return avcodec_send_frame(m_cctx, frame.get_inner());
+    }
+    int send_frame_flush() {
+        return avcodec_send_frame(m_cctx, NULL);
     }
     int receive_packet(Packet& pkt) {
         return avcodec_receive_packet(m_cctx, pkt.get_inner());
