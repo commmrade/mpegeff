@@ -27,6 +27,13 @@ public:
     const AVFrame* get_inner() const {
         return m_frame;
     }
+
+    void make_buffer(int align = 0) {
+        int ret = av_frame_get_buffer(m_frame, align);
+        if (ret < 0) {
+            throw std::bad_alloc{};
+        }
+    }
 };
 
 // struct FrameDealloc {
