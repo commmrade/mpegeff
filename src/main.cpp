@@ -4,7 +4,7 @@
 
 int main(int argc, char** argv) {
     // argparse::ArgumentParser parser{};
-    
+
     // std::string fuck_p;
     // int a;
     // parser.add_argument("--fuck")
@@ -32,14 +32,14 @@ int main(int argc, char** argv) {
     //     std::cerr << "Transmuxing failed: " << ex.what() << std::endl;
     // }
 
-    // IContext i{};
-    // i.filepath = "edit.mp4";
-    // OContext o{};
-    // o.filepath = "svo.mp4";
-    // try {
-    //     transcode("edit.mp4", "svo.mp4", i, o);
-    // } catch (const std::exception& ex) {
-    //     std::cerr << "Transcoding failed: " << ex.what() << std::endl;
-    // }
+    IContext i{};
+    i.filepath = "edit.mp4";
+    OContext o{};
+    o.filepath = "svo.mp4";
+    try {
+        transcode("edit.mp4", "svo.mp4", i, o);
+    } catch (const std::exception& ex) {
+        std::cerr << "Transcoding failed: " << ex.what() << std::endl;
+    }
     return 0;
 }
