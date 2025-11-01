@@ -314,6 +314,7 @@ void flush(IContext& ictx, OContext& octx, SwrCtx& swr_ctx, AudioFifo& fifo, int
 
     AVStream* is = istreams[ictx.vstream_idx];
     AVStream* os = ostreams[octx.vstream_idx];
+
     r = ictx.video_ctx->send_packet_flush();
     handle_transcode_error(r < 0, "Could not send flush packet to the video decoder")
     while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
@@ -328,6 +329,7 @@ void flush(IContext& ictx, OContext& octx, SwrCtx& swr_ctx, AudioFifo& fifo, int
         }
         frame.unref();
     }
+
     {
         int size_left = fifo.remaining_size();
         if (size_left) {
