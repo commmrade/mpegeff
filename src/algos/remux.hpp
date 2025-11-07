@@ -1,14 +1,17 @@
 #pragma once
 #include "formatcontext.hpp"
+#include <filesystem>
 
-void remux(std::string_view input, std::string_view output) {
+void remux(std::filesystem::path input, std::filesystem::path output, std::string_view out_ctr) {
+    std::printf("Done\n");
+
     InputFormatContext ictx{};
     OutputFormatContext octx;
 
-    ictx.open_input(input);
+    ictx.open_input(input.c_str());
     ictx.find_best_stream_info();
 
-    octx.alloc_output(output);
+    octx.alloc_output(output.c_str(), out_ctr);
 
     std::vector<AVStream*> streams = ictx.streams();
     std::size_t streams_sz = streams.size();
@@ -19,7 +22,7 @@ void remux(std::string_view input, std::string_view output) {
         ostream->codecpar->codec_tag = 0;
     }
 
-    octx.open_output(output, AVIO_FLAG_WRITE);
+    octx.open_output(output.c_str(), AVIO_FLAG_WRITE);
     octx.write_header();
 
     Packet pkt;
@@ -37,6 +40,6 @@ void remux(std::string_view input, std::string_view output) {
         pkt.rescale_ts(istream->time_base, ostream->time_base);
         octx.write_frame_interleaved(pkt);
     }
-    
+
     octx.write_trailer();
 }

@@ -103,7 +103,7 @@ public:
             free_context();
         }
         int ret = avformat_alloc_output_context2(&m_ctx, oformat, format_name.data(), filename.data());
-        if (ret < 0) throw format_context_error{"COuld not alloc output context"};
+        if (ret < 0) throw format_context_error{"Could not alloc output context"};
     }
     void open_output(const std::string_view url, int flags) {
         int r = avio_open(&m_ctx->pb, url.data(), flags);
@@ -129,7 +129,7 @@ public:
     }
     void write_frame_interleaved(Packet& pkt) {
         int r = av_interleaved_write_frame(m_ctx, pkt.get_inner());
-        if (r < 0) throw format_context_error{"COuld not write frme"};
+        if (r < 0) throw format_context_error{"Could not write frme"};
     }
 
     StreamT new_stream(const AVCodec* codec = nullptr) {
