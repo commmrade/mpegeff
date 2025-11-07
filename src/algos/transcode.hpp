@@ -5,6 +5,7 @@
 #include <format>
 #include <iostream>
 #include <libavcodec/codec_par.h>
+#include <memory>
 #include "audiofifo.hpp"
 #include "stream.hpp"
 #include "swrcontext.hpp"
@@ -61,9 +62,9 @@ struct OContext {
 #define handle_transcode_error(cond, msg) if (cond) { throw transcoding_error(msg); }
 
 
-void flush(IContext& ictx, OContext& octx, SwrCtx& swr_ctx, AudioFifo& fifo, int64_t pts);
+void flush(IContext& ictx, OContext& octx, std::unique_ptr<SwrCtx> swr_ctx, std::unique_ptr<AudioFifo> fifo, int64_t pts);
 
-void transcode(IContext& ictx, OContext& octx) {
+void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr) {
     ictx.fmt_ctx.open_input(ictx.filepath);
     ictx.fmt_ctx.find_best_stream_info();
 
@@ -115,6 +116,7 @@ void transcode(IContext& ictx, OContext& octx) {
 
                 octx.audio_codec = codec;
 
+                // TODO: HElper function to setup this params based on codec, since auto stuff sucks
                 octx.audio_ctx = std::make_unique<CodecContext>(codec);
                 octx.audio_ctx->get_inner()->bit_rate = 128000;  // 128 kbps для хорошего качества
                 octx.audio_ctx->get_inner()->time_base = AVRational{1, octx.audio_ctx->get_inner()->sample_rate};
@@ -168,229 +170,256 @@ void transcode(IContext& ictx, OContext& octx) {
 
     std::vector<AVStream*> ostreams = octx.fmt_ctx.streams();
 
-    SwrCtx swr_ctx{&octx.audio_ctx->get_inner()->ch_layout,
-    octx.audio_ctx->get_inner()->sample_fmt,
-    octx.audio_ctx->get_inner()->sample_rate,
-    &ictx.audio_ctx->get_inner()->ch_layout,
-    ictx.audio_ctx->get_inner()->sample_fmt,
-    ictx.audio_ctx->get_inner()->sample_rate};
+    // TODO: Fix if mux
+    std::unique_ptr<SwrCtx> swr_ctx;
+    std::unique_ptr<AudioFifo> fifo;
+    if (!ictx.mux_audio) {
+        swr_ctx = std::make_unique<SwrCtx>(&octx.audio_ctx->get_inner()->ch_layout,
+            octx.audio_ctx->get_inner()->sample_fmt,
+            octx.audio_ctx->get_inner()->sample_rate,
+            &ictx.audio_ctx->get_inner()->ch_layout,
+            ictx.audio_ctx->get_inner()->sample_fmt,
+            ictx.audio_ctx->get_inner()->sample_rate
+        );
+        fifo = std::make_unique<AudioFifo>(
+            octx.audio_ctx->get_inner()->sample_fmt,
+            octx.audio_ctx->get_inner()->ch_layout.nb_channels,
+            1
+        );
+        swr_ctx->init();
+    }
 
-
-    r = swr_ctx.init();
-    handle_transcode_error(r < 0, "Could not init swr context");
-
-    // TODO: CHANGE WRITING LOGIC DEPENDING ON MUXED OR NOT
-
-
-    AudioFifo fifo{octx.audio_ctx->get_inner()->sample_fmt, octx.audio_ctx->get_inner()->ch_layout.nb_channels, 1};
     int64_t pts = 0;
     while (ictx.fmt_ctx.read_raw_frame(pkt) >= 0) {
         int stream_index = pkt.stream_index();
         if (stream_index == ictx.astream_idx) {
             AVStream* is = istreams[ictx.astream_idx];
             AVStream* os = ostreams[octx.astream_idx];
-            // pkt.rescale_ts(is->time_base, os->time_base);
-            // pkt.set_stream_index(octx.astream_idx);
-            // octx.fmt_ctx.write_frame_interleaved(pkt);
 
-            r = ictx.audio_ctx->send_packet(pkt);
-            handle_transcode_error(r < 0, "Could not send packet to the decoder");
+            if (ictx.mux_audio) {
+                pkt.rescale_ts(is->time_base, os->time_base);
+                pkt.set_stream_index(octx.astream_idx);
+                octx.fmt_ctx.write_frame_interleaved(pkt);
+            } else {
+                r = ictx.audio_ctx->send_packet(pkt);
+                handle_transcode_error(r < 0, "Could not send packet to the decoder");
 
-            while ((r = ictx.audio_ctx->receive_frame(frame)) >= 0) {
-                uint8_t** converted_samples_buf = nullptr;
-                r = av_samples_alloc_array_and_samples(
-                    &converted_samples_buf,
-                    NULL,
-                    octx.audio_ctx->get_inner()->ch_layout.nb_channels,
-                    frame.get_inner()->nb_samples,
-                    octx.audio_ctx->get_inner()->sample_fmt,
-                    0);
-                handle_transcode_error(r < 0, "Could not alloc converted samples buf");
+                while ((r = ictx.audio_ctx->receive_frame(frame)) >= 0) {
+                    uint8_t** converted_samples_buf = nullptr;
+                    r = av_samples_alloc_array_and_samples(
+                        &converted_samples_buf,
+                        NULL,
+                        octx.audio_ctx->get_inner()->ch_layout.nb_channels,
+                        frame.get_inner()->nb_samples,
+                        octx.audio_ctx->get_inner()->sample_fmt,
+                        0);
+                    handle_transcode_error(r < 0, "Could not alloc converted samples buf");
 
-                int frame_size = octx.audio_ctx->get_inner()->frame_size;
-                int nb_samples = frame.get_inner()->nb_samples;
+                    int frame_size = octx.audio_ctx->get_inner()->frame_size;
+                    int nb_samples = frame.get_inner()->nb_samples;
 
-                nb_samples = swr_ctx.convert(converted_samples_buf, nb_samples, frame.get_inner()->extended_data, nb_samples);
-                handle_transcode_error(nb_samples < 0, "Could not convert");
+                    nb_samples = swr_ctx->convert(converted_samples_buf, nb_samples, frame.get_inner()->extended_data, nb_samples);
+                    handle_transcode_error(nb_samples < 0, "Could not convert");
 
-                fifo.resize(fifo.remaining_size() + nb_samples);
-                fifo.write((void**)converted_samples_buf, nb_samples);
+                    fifo->resize(fifo->remaining_size() + nb_samples);
+                    fifo->write((void**)converted_samples_buf, nb_samples);
 
-                while (fifo.remaining_size() >= frame_size) {
-                    Frame frame;
-                    frame.get_inner()->nb_samples = frame_size;
-                    av_channel_layout_copy(&frame.get_inner()->ch_layout, &octx.audio_ctx->get_inner()->ch_layout);
-                    frame.get_inner()->format = octx.audio_ctx->get_inner()->sample_fmt;
-                    frame.get_inner()->sample_rate = octx.audio_ctx->get_inner()->sample_rate;
-                    frame.make_buffer();
+                    while (fifo->remaining_size() >= frame_size) {
+                        Frame frame;
+                        frame.get_inner()->nb_samples = frame_size;
+                        av_channel_layout_copy(&frame.get_inner()->ch_layout, &octx.audio_ctx->get_inner()->ch_layout);
+                        frame.get_inner()->format = octx.audio_ctx->get_inner()->sample_fmt;
+                        frame.get_inner()->sample_rate = octx.audio_ctx->get_inner()->sample_rate;
+                        frame.make_buffer();
 
-                    fifo.read((void**)frame.get_inner()->data, frame_size);
+                        fifo->read((void**)frame.get_inner()->data, frame_size);
 
-                    frame.get_inner()->pts = pts;
-                    pts += frame_size;
+                        frame.get_inner()->pts = pts;
+                        pts += frame_size;
 
-                    r = octx.audio_ctx->send_frame(frame);
-                    handle_transcode_error(r < 0, "Could not send frame to the encoder in loop");
-                    while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
-                        pkt.rescale_ts(is->time_base, os->time_base);
-                        pkt.set_stream_index(octx.astream_idx);
+                        r = octx.audio_ctx->send_frame(frame);
+                        handle_transcode_error(r < 0, "Could not send frame to the encoder in loop");
+                        while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
+                            pkt.rescale_ts(is->time_base, os->time_base);
+                            pkt.set_stream_index(octx.astream_idx);
 
 
-                        octx.fmt_ctx.write_frame_interleaved(pkt);
+                            octx.fmt_ctx.write_frame_interleaved(pkt);
+                        }
+                        av_packet_unref(pkt.get_inner());
                     }
-                    av_packet_unref(pkt.get_inner());
-                }
 
-                av_freep(&converted_samples_buf[0]);
-                av_freep(&converted_samples_buf);
+                    av_freep(&converted_samples_buf[0]);
+                    av_freep(&converted_samples_buf);
+                }
             }
         } else if (stream_index == ictx.vstream_idx) {
             AVStream* is = istreams[ictx.vstream_idx];
             AVStream* os = ostreams[octx.vstream_idx];
 
-            r = ictx.video_ctx->send_packet(pkt);
-            handle_transcode_error(r < 0, "Could not send packet to the decoder");
+            if (ictx.mux_video) {
+                pkt.rescale_ts(is->time_base, os->time_base);
+                pkt.set_stream_index(octx.vstream_idx);
+                octx.fmt_ctx.write_frame_interleaved(pkt);
+            } else {
+                r = ictx.video_ctx->send_packet(pkt);
+                handle_transcode_error(r < 0, "Could not send packet to the decoder");
 
-            while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
-                r = octx.video_ctx->send_frame(frame);
-                handle_transcode_error(r < 0, "Could not send frame to the encoder");
+                while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
+                    r = octx.video_ctx->send_frame(frame);
+                    handle_transcode_error(r < 0, "Could not send frame to the encoder");
 
-                while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
-                    pkt.rescale_ts(is->time_base, os->time_base);
-                    pkt.set_stream_index(octx.vstream_idx);
+                    while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
+                        pkt.rescale_ts(is->time_base, os->time_base);
+                        pkt.set_stream_index(octx.vstream_idx);
 
-                    octx.fmt_ctx.write_frame_interleaved(pkt);
+                        octx.fmt_ctx.write_frame_interleaved(pkt);
+                    }
+                    av_packet_unref(pkt.get_inner());
+                    frame.unref();
                 }
-                av_packet_unref(pkt.get_inner());
-                frame.unref();
             }
         }
         av_packet_unref(pkt.get_inner());
     }
 
-    flush(ictx, octx, swr_ctx, fifo, pts);
+    // TODO: Fix flash for transmux flag
+    if (!ictx.mux_audio || !ictx.mux_video) {
+        flush(ictx, octx, std::move(swr_ctx), std::move(fifo), pts);
+    }
 
     octx.fmt_ctx.write_trailer();
 }
 
-void flush(IContext& ictx, OContext& octx, SwrCtx& swr_ctx, AudioFifo& fifo, int64_t pts) {
+
+void flush(IContext& ictx, OContext& octx, std::unique_ptr<SwrCtx> swr_ctx, std::unique_ptr<AudioFifo> fifo, int64_t pts) {
     std::vector<AVStream*> istreams = ictx.fmt_ctx.streams();
     std::vector<AVStream*> ostreams = octx.fmt_ctx.streams();
 
     Frame frame;
     Packet pkt;
-
     int r;
-    r = ictx.audio_ctx->send_packet_flush();
-    handle_transcode_error(r < 0, "Could not send flush packet to the audio decoder");
-    while ((r = ictx.audio_ctx->receive_frame(frame)) >= 0) {
-        AVStream* is = istreams[ictx.astream_idx];
-        AVStream* os = ostreams[octx.astream_idx];
 
-        uint8_t** converted_samples_buf = nullptr;
-        r = av_samples_alloc_array_and_samples(
-            &converted_samples_buf,
-            NULL,
-            octx.audio_ctx->get_inner()->ch_layout.nb_channels,
-            frame.get_inner()->nb_samples,
-            octx.audio_ctx->get_inner()->sample_fmt,
-            0);
-        handle_transcode_error(r < 0, "Could not alloc converted samples buf");
+    if (!ictx.mux_audio) {
+        r = ictx.audio_ctx->send_packet_flush();
+        handle_transcode_error(r < 0, "Could not send flush packet to the audio decoder");
+        while ((r = ictx.audio_ctx->receive_frame(frame)) >= 0) {
+            AVStream* is = istreams[ictx.astream_idx];
+            AVStream* os = ostreams[octx.astream_idx];
 
-        int frame_size = octx.audio_ctx->get_inner()->frame_size;
-        int nb_samples = frame.get_inner()->nb_samples;
+            uint8_t** converted_samples_buf = nullptr;
+            r = av_samples_alloc_array_and_samples(
+                &converted_samples_buf,
+                NULL,
+                octx.audio_ctx->get_inner()->ch_layout.nb_channels,
+                frame.get_inner()->nb_samples,
+                octx.audio_ctx->get_inner()->sample_fmt,
+                0);
+            handle_transcode_error(r < 0, "Could not alloc converted samples buf");
 
-        nb_samples = swr_ctx.convert(converted_samples_buf, nb_samples, frame.get_inner()->extended_data, nb_samples);
-        handle_transcode_error(nb_samples < 0, "Could not convert");
+            int frame_size = octx.audio_ctx->get_inner()->frame_size;
+            int nb_samples = frame.get_inner()->nb_samples;
 
-        fifo.resize(fifo.remaining_size() + nb_samples);
-        fifo.write((void**)converted_samples_buf, nb_samples);
+            nb_samples = swr_ctx->convert(converted_samples_buf, nb_samples, frame.get_inner()->extended_data, nb_samples);
+            handle_transcode_error(nb_samples < 0, "Could not convert");
 
-        while (fifo.remaining_size() >= frame_size) {
-            Frame frame;
-            frame.get_inner()->nb_samples = frame_size;
-            av_channel_layout_copy(&frame.get_inner()->ch_layout, &octx.audio_ctx->get_inner()->ch_layout);
-            frame.get_inner()->format = octx.audio_ctx->get_inner()->sample_fmt;
-            frame.get_inner()->sample_rate = octx.audio_ctx->get_inner()->sample_rate;
-            frame.make_buffer();
+            fifo->resize(fifo->remaining_size() + nb_samples);
+            fifo->write((void**)converted_samples_buf, nb_samples);
 
-            fifo.read((void**)frame.get_inner()->data, frame_size);
+            while (fifo->remaining_size() >= frame_size) {
+                Frame frame;
+                frame.get_inner()->nb_samples = frame_size;
+                av_channel_layout_copy(&frame.get_inner()->ch_layout, &octx.audio_ctx->get_inner()->ch_layout);
+                frame.get_inner()->format = octx.audio_ctx->get_inner()->sample_fmt;
+                frame.get_inner()->sample_rate = octx.audio_ctx->get_inner()->sample_rate;
+                frame.make_buffer();
 
-            frame.get_inner()->pts = pts;
-            r = octx.audio_ctx->send_frame(frame);
-            handle_transcode_error(r < 0, "Could not send frame to the encoder in loop");
-            while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
-                pkt.rescale_ts(is->time_base, os->time_base);
-                pkt.set_stream_index(octx.astream_idx);
-                octx.fmt_ctx.write_frame_interleaved(pkt);
+                fifo->read((void**)frame.get_inner()->data, frame_size);
+
+                frame.get_inner()->pts = pts;
+                r = octx.audio_ctx->send_frame(frame);
+                handle_transcode_error(r < 0, "Could not send frame to the encoder in loop");
+                while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
+                    pkt.rescale_ts(is->time_base, os->time_base);
+                    pkt.set_stream_index(octx.astream_idx);
+                    octx.fmt_ctx.write_frame_interleaved(pkt);
+                }
+                av_packet_unref(pkt.get_inner());
             }
-            av_packet_unref(pkt.get_inner());
-        }
 
-        delete[] converted_samples_buf;
+            delete[] converted_samples_buf;
+        }
     }
 
 
     AVStream* is = istreams[ictx.vstream_idx];
     AVStream* os = ostreams[octx.vstream_idx];
 
-    r = ictx.video_ctx->send_packet_flush();
-    handle_transcode_error(r < 0, "Could not send flush packet to the video decoder")
-    while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
-        r = octx.video_ctx->send_frame(frame);
-        handle_transcode_error(r < 0, "Could not send frame to the encoder");
+    if (!ictx.mux_video) {
+        r = ictx.video_ctx->send_packet_flush();
+        handle_transcode_error(r < 0, "Could not send flush packet to the video decoder")
+        while ((r = ictx.video_ctx->receive_frame(frame)) >= 0) {
+            r = octx.video_ctx->send_frame(frame);
+            handle_transcode_error(r < 0, "Could not send frame to the encoder");
 
+            while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
+                pkt.rescale_ts(is->time_base, os->time_base);
+                pkt.set_stream_index(octx.vstream_idx);
+
+                octx.fmt_ctx.write_frame_interleaved(pkt);
+            }
+            frame.unref();
+        }
+    }
+
+    {
+        if (!ictx.mux_audio) {
+            int size_left = fifo->remaining_size();
+            if (size_left) {
+                Frame frame;
+                frame.get_inner()->nb_samples = size_left;
+                av_channel_layout_copy(&frame.get_inner()->ch_layout, &octx.audio_ctx->get_inner()->ch_layout);
+                frame.get_inner()->format = octx.audio_ctx->get_inner()->sample_fmt;
+                frame.get_inner()->sample_rate = octx.audio_ctx->get_inner()->sample_rate;
+                frame.make_buffer();
+
+                fifo->read((void**)frame.get_inner()->data, size_left);
+
+                frame.get_inner()->pts = pts;
+                r = octx.audio_ctx->send_frame(frame);
+                handle_transcode_error(r < 0, "Could not send frame to the encoder in loop");
+                while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
+                    pkt.rescale_ts(is->time_base, os->time_base);
+                    pkt.set_stream_index(octx.astream_idx);
+
+                    octx.fmt_ctx.write_frame_interleaved(pkt);
+                }
+                av_packet_unref(pkt.get_inner());
+            }
+        }
+    }
+
+
+    // flush encoder
+    if (!ictx.mux_video) {
+        r = octx.video_ctx->send_frame_flush();
+        handle_transcode_error(r < 0, "Could not send flush frame to the encoder");
         while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
             pkt.rescale_ts(is->time_base, os->time_base);
             pkt.set_stream_index(octx.vstream_idx);
 
             octx.fmt_ctx.write_frame_interleaved(pkt);
         }
-        frame.unref();
+        av_packet_unref(pkt.get_inner());
     }
 
-    {
-        int size_left = fifo.remaining_size();
-        if (size_left) {
-            Frame frame;
-            frame.get_inner()->nb_samples = size_left;
-            av_channel_layout_copy(&frame.get_inner()->ch_layout, &octx.audio_ctx->get_inner()->ch_layout);
-            frame.get_inner()->format = octx.audio_ctx->get_inner()->sample_fmt;
-            frame.get_inner()->sample_rate = octx.audio_ctx->get_inner()->sample_rate;
-            frame.make_buffer();
+    if (!ictx.mux_audio) {
+        r = octx.audio_ctx->send_frame_flush();
+        while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
+            pkt.rescale_ts(is->time_base, os->time_base);
+            pkt.set_stream_index(octx.vstream_idx);
 
-            fifo.read((void**)frame.get_inner()->data, size_left);
-
-            frame.get_inner()->pts = pts;
-            r = octx.audio_ctx->send_frame(frame);
-            handle_transcode_error(r < 0, "Could not send frame to the encoder in loop");
-            while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
-                pkt.rescale_ts(is->time_base, os->time_base);
-                pkt.set_stream_index(octx.astream_idx);
-
-                octx.fmt_ctx.write_frame_interleaved(pkt);
-            }
-            av_packet_unref(pkt.get_inner());
+            octx.fmt_ctx.write_frame_interleaved(pkt);
         }
-    }
-
-
-    // flush encoder
-    r = octx.video_ctx->send_frame_flush();
-    handle_transcode_error(r < 0, "Could not send flush frame to the encoder");
-    while ((r = octx.video_ctx->receive_packet(pkt)) >= 0) {
-        pkt.rescale_ts(is->time_base, os->time_base);
-        pkt.set_stream_index(octx.vstream_idx);
-
-        octx.fmt_ctx.write_frame_interleaved(pkt);
-    }
-    av_packet_unref(pkt.get_inner());
-
-    r = octx.audio_ctx->send_frame_flush();
-    while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
-        pkt.rescale_ts(is->time_base, os->time_base);
-        pkt.set_stream_index(octx.vstream_idx);
-
-        octx.fmt_ctx.write_frame_interleaved(pkt);
     }
 }
