@@ -4,7 +4,9 @@
 #include <cstdio>
 #include <format>
 #include <iostream>
+#include <libavcodec/codec_par.h>
 #include "audiofifo.hpp"
+#include "stream.hpp"
 #include "swrcontext.hpp"
 extern "C" {
     #include <libavcodec/packet.h>
@@ -25,6 +27,9 @@ struct IContext {
 
     int astream_idx{};
     int vstream_idx{};
+
+    bool mux_audio;
+    bool mux_video;
 
     std::unique_ptr<CodecContext> audio_ctx{nullptr};
     std::unique_ptr<CodecContext> video_ctx{nullptr};
@@ -58,7 +63,7 @@ struct OContext {
 
 void flush(IContext& ictx, OContext& octx, SwrCtx& swr_ctx, AudioFifo& fifo, int64_t pts);
 
-void transcode(std::string_view input, std::string_view output, IContext& ictx, OContext& octx) {
+void transcode(IContext& ictx, OContext& octx) {
     ictx.fmt_ctx.open_input(ictx.filepath);
     ictx.fmt_ctx.find_best_stream_info();
 
@@ -93,53 +98,63 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
         AVStream* i_stream = istreams[i];
         int media_type = i_stream->codecpar->codec_type;
         if (media_type == AVMEDIA_TYPE_AUDIO) {
-            // StreamT o_stream = octx.fmt_ctx.new_stream();
-            // octx.audio_stream = o_stream;
-            // octx.astream_idx = i;
-            // avcodec_parameters_copy(o_stream->codecpar, i_stream->codecpar);
 
-            // TODO: COnfigure some stuff manually some stuff audo
-            StreamT o_stream = octx.fmt_ctx.new_stream();
-            octx.audio_stream = o_stream;
-            octx.astream_idx = i;
+            if (ictx.mux_audio) {
+                StreamT o_stream = octx.fmt_ctx.new_stream();
+                octx.audio_stream = o_stream;
+                octx.astream_idx = i;
+                avcodec_parameters_copy(o_stream->codecpar, i_stream->codecpar);
+            } else {
+                StreamT o_stream = octx.fmt_ctx.new_stream();
+                octx.audio_stream = o_stream;
+                octx.astream_idx = i;
 
-            const char* encoder_name = "aac";
-            const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
-            handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
+                const char* encoder_name = "aac";
+                const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
+                handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
 
-            octx.audio_codec = codec;
+                octx.audio_codec = codec;
 
-            octx.audio_ctx = std::make_unique<CodecContext>(codec);
-            octx.audio_ctx->get_inner()->bit_rate = 128000;  // 128 kbps для хорошего качества
-            octx.audio_ctx->get_inner()->time_base = AVRational{1, octx.audio_ctx->get_inner()->sample_rate};
-            octx.audio_ctx->get_inner()->sample_rate = ictx.audio_ctx->get_inner()->sample_rate;
+                octx.audio_ctx = std::make_unique<CodecContext>(codec);
+                octx.audio_ctx->get_inner()->bit_rate = 128000;  // 128 kbps для хорошего качества
+                octx.audio_ctx->get_inner()->time_base = AVRational{1, octx.audio_ctx->get_inner()->sample_rate};
+                octx.audio_ctx->get_inner()->sample_rate = ictx.audio_ctx->get_inner()->sample_rate;
 
-            octx.audio_ctx->get_inner()->sample_fmt = AV_SAMPLE_FMT_FLTP;  // Float planar для высокого качества
-            av_channel_layout_default(&octx.audio_ctx->get_inner()->ch_layout, 2);  // Stereo (2 channels)
+                octx.audio_ctx->get_inner()->sample_fmt = AV_SAMPLE_FMT_FLTP;  // Float planar для высокого качества
+                av_channel_layout_default(&octx.audio_ctx->get_inner()->ch_layout, 2);  // Stereo (2 channels)
 
-            octx.audio_ctx->open(codec);
-            octx.audio_ctx->paste_params_to(o_stream->codecpar);
+                octx.audio_ctx->open(codec);
+                octx.audio_ctx->paste_params_to(o_stream->codecpar);
+            }
         } else if (media_type == AVMEDIA_TYPE_VIDEO) {
-            octx.vstream_idx = i;
-            StreamT o_stream = octx.fmt_ctx.new_stream();
-            octx.video_stream = o_stream;
 
-            // const char* encoder_name = "libaom-av1"; // TODO: CHange
-            const char* encoder_name = "libsvtav1";
-            const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
-            handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
+            if (ictx.mux_video) {
+                StreamT video_stream = octx.fmt_ctx.new_stream();
+                octx.video_stream = video_stream;
+                octx.vstream_idx = i;
+                avcodec_parameters_copy(video_stream->codecpar, i_stream->codecpar);
+            } else {
+                octx.vstream_idx = i;
+                StreamT o_stream = octx.fmt_ctx.new_stream();
+                octx.video_stream = o_stream;
 
-            octx.video_codec = codec;
+                const char* encoder_name = "libsvtav1";
+                const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
+                handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
 
-            octx.video_ctx = std::make_unique<CodecContext>(codec);
-            octx.video_ctx->get_inner()->bit_rate = ictx.video_ctx->get_inner()->bit_rate;
-            octx.video_ctx->get_inner()->time_base = av_inv_q(ictx.video_ctx->get_inner()->framerate);
-            octx.video_ctx->get_inner()->height = ictx.video_ctx->get_inner()->height;
-            octx.video_ctx->get_inner()->width = ictx.video_ctx->get_inner()->width;
-            octx.video_ctx->get_inner()->pix_fmt = ictx.video_ctx->get_inner()->pix_fmt;
+                octx.video_codec = codec;
 
-            octx.video_ctx->open(codec);
-            octx.video_ctx->paste_params_to(o_stream->codecpar);
+                octx.video_ctx = std::make_unique<CodecContext>(codec);
+                octx.video_ctx->get_inner()->bit_rate = ictx.video_ctx->get_inner()->bit_rate;
+                octx.video_ctx->get_inner()->time_base = av_inv_q(ictx.video_ctx->get_inner()->framerate);
+                octx.video_ctx->get_inner()->height = ictx.video_ctx->get_inner()->height;
+                octx.video_ctx->get_inner()->width = ictx.video_ctx->get_inner()->width;
+                octx.video_ctx->get_inner()->pix_fmt = ictx.video_ctx->get_inner()->pix_fmt;
+
+                octx.video_ctx->open(codec);
+                octx.video_ctx->paste_params_to(o_stream->codecpar);
+            }
+
         }
     }
 
@@ -163,6 +178,9 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
 
     r = swr_ctx.init();
     handle_transcode_error(r < 0, "Could not init swr context");
+
+    // TODO: CHANGE WRITING LOGIC DEPENDING ON MUXED OR NOT
+
 
     AudioFifo fifo{octx.audio_ctx->get_inner()->sample_fmt, octx.audio_ctx->get_inner()->ch_layout.nb_channels, 1};
     int64_t pts = 0;
@@ -223,7 +241,8 @@ void transcode(std::string_view input, std::string_view output, IContext& ictx, 
                     av_packet_unref(pkt.get_inner());
                 }
 
-                delete[] converted_samples_buf;
+                av_freep(&converted_samples_buf[0]);
+                av_freep(&converted_samples_buf);
             }
         } else if (stream_index == ictx.vstream_idx) {
             AVStream* is = istreams[ictx.vstream_idx];

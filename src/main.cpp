@@ -12,18 +12,41 @@ int main(int argc, char** argv) {
         .help("Output file");
 
     // Modes
-    auto& group = parser.add_mutually_exclusive_group();
-    group.add_argument("--transmux")
-        .flag()
-        .help("Transmuxing mode");
-    group.add_argument("--transcode")
-        .flag()
-        .help("Transcoding mode");
+    {
+        auto& group = parser.add_mutually_exclusive_group();
+        group.add_argument("--transmux")
+            .flag()
+            .help("Transmuxing mode");
+        group.add_argument("--transcode")
+            .flag()
+            .help("Transcoding mode");
+    }
 
     // Transmux params
-    parser.add_argument("--to")
-        .default_value(std::string{})
-        .help("To which container format");
+    {
+        parser.add_argument("--to")
+            .default_value(std::string{})
+            .help("To which container format");
+    }
+
+    // Transcode params
+    {
+        auto& audio_group = parser.add_mutually_exclusive_group();
+        audio_group.add_argument("--tm-audio")
+            .flag()
+            .help("Don't transcode audio, just transmux (in transcoding mode)");
+        audio_group.add_argument("--codec-audio")
+            .default_value(std::string{})
+            .help("Audio codec");
+
+        auto& video_group = parser.add_mutually_exclusive_group();
+        video_group.add_argument("--tm-video")
+            .flag()
+            .help("Don't transcode video, just transmux (in transmuxing mode)");
+        video_group.add_argument("--codec-video")
+            .default_value(std::string{})
+            .help("Video codec");
+    }
 
     try {
         parser.parse_args(argc, argv);
@@ -44,6 +67,16 @@ int main(int argc, char** argv) {
         } catch (const std::exception& ex) {
             std::cerr << "Caught exception when transmuxing: " << ex.what() << std::endl;
         }
+    } else if (is_transcoding) {
+        IContext i;
+        i.filepath = std::move(i_path);
+        i.mux_audio = parser.is_used("tm-audio");
+        i.mux_video = parser.is_used("tm-video");
+
+        OContext o;
+        o.filepath = std::move(o_path);
+
+        transcode(i, o);
     }
     return 0;
 }
