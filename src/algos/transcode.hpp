@@ -5,6 +5,7 @@
 #include <format>
 #include <iostream>
 #include <libavcodec/codec_par.h>
+#include <libavutil/rational.h>
 #include <memory>
 #include "audiofifo.hpp"
 #include "stream.hpp"
@@ -151,22 +152,16 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::str
                 octx.video_ctx = std::make_unique<CodecContext>(codec);
                 octx.video_ctx->get_inner()->bit_rate = ictx.video_ctx->get_inner()->bit_rate;
 
+                AVRational fr = ictx.video_ctx->get_inner()->framerate;
+                if (fr.num == 0 || fr.den == 0) {
+                    fr = i_stream->avg_frame_rate;
+                }
+                if (fr.num == 0 || fr.den == 0) {
+                    fr = av_make_q(24, 1);
+                }
 
-                octx.video_ctx->get_inner()->time_base = av_inv_q(ictx.video_ctx->get_inner()->framerate);
-
-                // AVRational fr = ictx.video_ctx->get_inner()->framerate;
-
-                // // если framerate пуст — возьми из потока
-                // // if (fr.num == 0 || fr.den == 0)
-                // //     fr = i_stream->avg_frame_rate;
-
-                // // если и там нет — fallback на 25 fps
-                // // if (fr.num == 0 || fr.den == 0)
-                // fr = av_make_q(25, 1);
-
-                // octx.video_ctx->get_inner()->framerate = fr;
-                // octx.video_ctx->get_inner()->time_base = av_inv_q(fr);
-
+                octx.video_ctx->get_inner()->framerate = fr;
+                octx.video_ctx->get_inner()->time_base = av_inv_q(fr);
 
                 octx.video_ctx->get_inner()->height = ictx.video_ctx->get_inner()->height;
                 octx.video_ctx->get_inner()->width = ictx.video_ctx->get_inner()->width;
@@ -434,11 +429,14 @@ void flush(IContext& ictx, OContext& octx, std::unique_ptr<SwrCtx> swr_ctx, std:
 
     if (!ictx.mux_audio) {
         r = octx.audio_ctx->send_frame_flush();
+        handle_transcode_error(r < 0, "Could not send frame to the encoder in loop");
         while ((r = octx.audio_ctx->receive_packet(pkt)) >= 0) {
             pkt.rescale_ts(is->time_base, os->time_base);
-            pkt.set_stream_index(octx.vstream_idx);
+            pkt.set_stream_index(octx.astream_idx);
 
             octx.fmt_ctx.write_frame_interleaved(pkt);
         }
+        av_packet_unref(pkt.get_inner());
+
     }
 }
