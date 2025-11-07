@@ -16,8 +16,6 @@ void set_audio_codec_params(const AVCodec* codec, CodecContext& occtx, CodecCont
     } else if (encoder == "opus" || encoder == "libopus") {
         occtx.get_inner()->bit_rate = 128000;  // 128 kbps для хорошего качества
         occtx.get_inner()->time_base = AVRational{1, occtx.get_inner()->sample_rate};
-        // occtx.get_inner()->sample_rate = icctx.get_inner()->sample_rate;
-        // occtx.get_inner()->sample_rate = codec->supported_samplerates[0];
 
         const int* supported = nullptr;
         int count = 0;

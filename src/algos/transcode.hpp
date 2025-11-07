@@ -121,13 +121,6 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::str
                 octx.audio_ctx = std::make_unique<CodecContext>(codec);
 
                 set_audio_codec_params(codec, *octx.audio_ctx, *ictx.audio_ctx, codec_audio);
-                // octx.audio_ctx->get_inner()->bit_rate = 128000;  // 128 kbps для хорошего качества
-                // octx.audio_ctx->get_inner()->time_base = AVRational{1, octx.audio_ctx->get_inner()->sample_rate};
-                // octx.audio_ctx->get_inner()->sample_rate = ictx.audio_ctx->get_inner()->sample_rate;
-
-                // octx.audio_ctx->get_inner()->sample_fmt = AV_SAMPLE_FMT_FLTP;  // Float planar для высокого качества
-                // // av_channel_layout_default(&octx.audio_ctx->get_inner()->ch_layout);  // Stereo (2 channels)
-                // av_channel_layout_copy(&octx.audio_ctx->get_inner()->ch_layout, &ictx.audio_ctx->get_inner()->ch_layout);
 
                 octx.audio_ctx->open(codec);
                 octx.audio_ctx->paste_params_to(o_stream->codecpar);
@@ -152,11 +145,11 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::str
                 octx.video_ctx = std::make_unique<CodecContext>(codec);
                 octx.video_ctx->get_inner()->bit_rate = ictx.video_ctx->get_inner()->bit_rate;
 
-                AVRational fr = ictx.video_ctx->get_inner()->framerate;
+                AVRational fr = ictx.video_ctx->get_inner()->framerate; // Try to guess framerate from input codec context
                 if (fr.num == 0 || fr.den == 0) {
-                    fr = i_stream->avg_frame_rate;
+                    fr = i_stream->avg_frame_rate; // Input codec context might now containe framerate data, so fall back to stream framerate
                 }
-                if (fr.num == 0 || fr.den == 0) {
+                if (fr.num == 0 || fr.den == 0) { // If stream is fucked up and does not contain framerate data, fall back to hard coded framerate
                     fr = av_make_q(24, 1);
                 }
 
