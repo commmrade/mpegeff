@@ -9,6 +9,7 @@
 #include "audiofifo.hpp"
 #include "stream.hpp"
 #include "swrcontext.hpp"
+#include "../utils.hpp"
 extern "C" {
     #include <libavcodec/packet.h>
     #include <libavutil/mathematics.h>
@@ -117,12 +118,15 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::str
 
                 // TODO: HElper function to setup this params based on codec, since auto stuff sucks
                 octx.audio_ctx = std::make_unique<CodecContext>(codec);
-                octx.audio_ctx->get_inner()->bit_rate = 128000;  // 128 kbps для хорошего качества
-                octx.audio_ctx->get_inner()->time_base = AVRational{1, octx.audio_ctx->get_inner()->sample_rate};
-                octx.audio_ctx->get_inner()->sample_rate = ictx.audio_ctx->get_inner()->sample_rate;
 
-                octx.audio_ctx->get_inner()->sample_fmt = AV_SAMPLE_FMT_FLTP;  // Float planar для высокого качества
-                av_channel_layout_default(&octx.audio_ctx->get_inner()->ch_layout, 2);  // Stereo (2 channels)
+                set_audio_codec_params(codec, *octx.audio_ctx, *ictx.audio_ctx, codec_audio);
+                // octx.audio_ctx->get_inner()->bit_rate = 128000;  // 128 kbps для хорошего качества
+                // octx.audio_ctx->get_inner()->time_base = AVRational{1, octx.audio_ctx->get_inner()->sample_rate};
+                // octx.audio_ctx->get_inner()->sample_rate = ictx.audio_ctx->get_inner()->sample_rate;
+
+                // octx.audio_ctx->get_inner()->sample_fmt = AV_SAMPLE_FMT_FLTP;  // Float planar для высокого качества
+                // // av_channel_layout_default(&octx.audio_ctx->get_inner()->ch_layout);  // Stereo (2 channels)
+                // av_channel_layout_copy(&octx.audio_ctx->get_inner()->ch_layout, &ictx.audio_ctx->get_inner()->ch_layout);
 
                 octx.audio_ctx->open(codec);
                 octx.audio_ctx->paste_params_to(o_stream->codecpar);
@@ -146,7 +150,24 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::str
 
                 octx.video_ctx = std::make_unique<CodecContext>(codec);
                 octx.video_ctx->get_inner()->bit_rate = ictx.video_ctx->get_inner()->bit_rate;
+
+
                 octx.video_ctx->get_inner()->time_base = av_inv_q(ictx.video_ctx->get_inner()->framerate);
+
+                // AVRational fr = ictx.video_ctx->get_inner()->framerate;
+
+                // // если framerate пуст — возьми из потока
+                // // if (fr.num == 0 || fr.den == 0)
+                // //     fr = i_stream->avg_frame_rate;
+
+                // // если и там нет — fallback на 25 fps
+                // // if (fr.num == 0 || fr.den == 0)
+                // fr = av_make_q(25, 1);
+
+                // octx.video_ctx->get_inner()->framerate = fr;
+                // octx.video_ctx->get_inner()->time_base = av_inv_q(fr);
+
+
                 octx.video_ctx->get_inner()->height = ictx.video_ctx->get_inner()->height;
                 octx.video_ctx->get_inner()->width = ictx.video_ctx->get_inner()->width;
                 octx.video_ctx->get_inner()->pix_fmt = ictx.video_ctx->get_inner()->pix_fmt;
