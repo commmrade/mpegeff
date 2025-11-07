@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
             .flag()
             .help("Don't transcode audio, just transmux (in transcoding mode)");
         audio_group.add_argument("--codec-audio")
-            .default_value(std::string{})
+            .default_value(std::string{"aac"})
             .help("Audio codec");
 
         auto& video_group = parser.add_mutually_exclusive_group();
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
             .flag()
             .help("Don't transcode video, just transmux (in transmuxing mode)");
         video_group.add_argument("--codec-video")
-            .default_value(std::string{})
+            .default_value(std::string{"libsvtav1"})
             .help("Video codec");
     }
 
@@ -75,7 +75,9 @@ int main(int argc, char** argv) {
         OContext o;
         o.filepath = std::move(o_path);
 
-        transcode(i, o, to_ctr);
+        auto codec_audio = parser.get<std::string>("codec-audio");
+        auto codec_video = parser.get<std::string>("codec-video");
+        transcode(i, o, to_ctr, codec_audio, codec_video);
     }
     return 0;
 }

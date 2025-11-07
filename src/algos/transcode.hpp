@@ -64,7 +64,7 @@ struct OContext {
 
 void flush(IContext& ictx, OContext& octx, std::unique_ptr<SwrCtx> swr_ctx, std::unique_ptr<AudioFifo> fifo, int64_t pts);
 
-void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr) {
+void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::string_view codec_audio, std::string_view codec_video) {
     ictx.fmt_ctx.open_input(ictx.filepath);
     ictx.fmt_ctx.find_best_stream_info();
 
@@ -110,9 +110,8 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr) {
                 octx.audio_stream = o_stream;
                 octx.astream_idx = i;
 
-                const char* encoder_name = "aac";
-                const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
-                handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
+                const AVCodec* codec = avcodec_find_encoder_by_name(codec_audio.data());
+                handle_transcode_error(!codec, std::format("Could not find encoder by name {}", codec_audio.data()));
 
                 octx.audio_codec = codec;
 
@@ -140,9 +139,8 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr) {
                 StreamT o_stream = octx.fmt_ctx.new_stream();
                 octx.video_stream = o_stream;
 
-                const char* encoder_name = "libsvtav1";
-                const AVCodec* codec = avcodec_find_encoder_by_name(encoder_name);
-                handle_transcode_error(!codec, std::format("Could not find encoder by name {}", encoder_name));
+                const AVCodec* codec = avcodec_find_encoder_by_name(codec_video.data());
+                handle_transcode_error(!codec, std::format("Could not find encoder by name {}", codec_video.data()));
 
                 octx.video_codec = codec;
 
@@ -295,7 +293,7 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr) {
 void flush(IContext& ictx, OContext& octx, std::unique_ptr<SwrCtx> swr_ctx, std::unique_ptr<AudioFifo> fifo, int64_t pts) {
     std::vector<AVStream*> istreams = ictx.fmt_ctx.streams();
     std::vector<AVStream*> ostreams = octx.fmt_ctx.streams();
-
+    // TODO: FIX obu_reserved_1bit out of range: 1, but must be in [0,0]
     Frame frame;
     Packet pkt;
     int r;
