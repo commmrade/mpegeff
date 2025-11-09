@@ -1,16 +1,12 @@
 #pragma once
 #include "formatcontext.hpp"
 #include "codeccontext.hpp"
-#include <cstdio>
-#include <format>
-#include <iostream>
 #include <libavcodec/codec_par.h>
 #include <libavutil/rational.h>
 #include <memory>
 #include "audiofifo.hpp"
 #include "stream.hpp"
 #include "swrcontext.hpp"
-#include "../utils.hpp"
 extern "C" {
     #include <libavcodec/packet.h>
     #include <libavutil/mathematics.h>
@@ -63,5 +59,5 @@ struct OContext {
 
 #define handle_transcode_error(cond, msg) if (cond) { throw transcoding_error(msg); }
 
-void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::string_view codec_audio, std::string_view codec_video);
+void transcode(IContext& ictx, OContext& octx, std::string_view codec_audio, std::string_view codec_video);
 void flush(IContext& ictx, OContext& octx, std::unique_ptr<SwrCtx> swr_ctx, std::unique_ptr<AudioFifo> fifo, int64_t pts);

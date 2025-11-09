@@ -1,12 +1,14 @@
 #include "transcode.hpp"
+#include <format>
+#include "../utils.hpp"
 
-void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::string_view codec_audio, std::string_view codec_video) {
+void transcode(IContext& ictx, OContext& octx, std::string_view codec_audio, std::string_view codec_video) {
     ictx.fmt_ctx.open_input(ictx.filepath);
     ictx.fmt_ctx.find_best_stream_info();
 
     int r = 0;
     std::vector<AVStream*> istreams = ictx.fmt_ctx.streams();
-    for (auto i = 0; i < istreams.size(); ++i) {
+    for (std::size_t i = 0; i < istreams.size(); ++i) {
         AVCodecParameters* cparams = istreams[i]->codecpar;
         const AVCodec* codec = avcodec_find_decoder(cparams->codec_id);
         handle_transcode_error(!codec, std::format("Could not find decoder for stream {}", i));
@@ -31,7 +33,7 @@ void transcode(IContext& ictx, OContext& octx, std::string_view to_ctr, std::str
     octx.fmt_ctx.alloc_output(octx.filepath);
 
     // Setup encoder
-    for (auto i = 0; i < istreams.size(); ++i) {
+    for (std::size_t i = 0; i < istreams.size(); ++i) {
         AVStream* i_stream = istreams[i];
         int media_type = i_stream->codecpar->codec_type;
         if (media_type == AVMEDIA_TYPE_AUDIO) {

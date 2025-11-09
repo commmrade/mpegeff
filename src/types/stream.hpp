@@ -5,7 +5,7 @@ extern "C" {
 }
 
 struct StreamDeleter {
-    void operator()(AVStream* stream) {
+    void operator()([[maybe_unused]] AVStream* stream) {
         // do nothing, cleaned up in fmt ctx destructor
     }
 };

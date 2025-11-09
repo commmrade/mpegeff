@@ -1,5 +1,5 @@
 #include "remux.hpp"
-
+#include "formatcontext.hpp"
 
 void remux(std::filesystem::path input, std::filesystem::path output, std::string_view out_ctr) {
     std::printf("Done\n");
@@ -14,7 +14,7 @@ void remux(std::filesystem::path input, std::filesystem::path output, std::strin
 
     std::vector<AVStream*> streams = ictx.streams();
     std::size_t streams_sz = streams.size();
-    for (auto i = 0; i < streams_sz; ++i) {
+    for (std::size_t i = 0; i < streams_sz; ++i) {
         AVStream* istream = streams[i];
         StreamT ostream = octx.new_stream();
         avcodec_parameters_copy(ostream->codecpar, istream->codecpar);

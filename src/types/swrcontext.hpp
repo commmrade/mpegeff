@@ -1,4 +1,3 @@
-#include <new>
 extern "C" {
     #include <libswresample/swresample.h>
 }

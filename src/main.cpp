@@ -1,7 +1,6 @@
 #include "transcode.hpp"
 #include "remux.hpp"
 #include "argparse/argparse.hpp"
-#include <cstdio>
 #include <exception>
 
 void setup_arguments(argparse::ArgumentParser& parser) {
@@ -63,9 +62,9 @@ int main(int argc, char** argv) {
     bool is_transcoding = parser.is_used("transcode");
     auto i_path = parser.get<std::string>("i");
     auto o_path = parser.get<std::string>("o");
-    auto to_ctr = parser.get<std::string>("to");
 
     if (is_transmuxing) {
+        auto to_ctr = parser.get<std::string>("to");
         try {
             remux(i_path, o_path, to_ctr);
         } catch (const std::exception& ex) {
@@ -84,7 +83,7 @@ int main(int argc, char** argv) {
         auto codec_video = parser.get<std::string>("codec-video");
 
         try {
-            transcode(i, o, to_ctr, codec_audio, codec_video);
+            transcode(i, o, codec_audio, codec_video);
         } catch (const std::exception& ex) {
             std::cerr << "Caught exception when transcoding: " << ex.what() << std::endl;
         }
