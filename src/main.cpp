@@ -4,8 +4,7 @@
 #include <cstdio>
 #include <exception>
 
-int main(int argc, char** argv) {
-    argparse::ArgumentParser parser;
+void setup_arguments(argparse::ArgumentParser& parser) {
     parser.add_argument("-i")
         .help("Input file");
     parser.add_argument("-o")
@@ -47,6 +46,12 @@ int main(int argc, char** argv) {
             .default_value(std::string{"libsvtav1"})
             .help("Video codec");
     }
+}
+
+
+int main(int argc, char** argv) {
+    argparse::ArgumentParser parser;
+    setup_arguments(parser);
 
     try {
         parser.parse_args(argc, argv);
@@ -77,7 +82,12 @@ int main(int argc, char** argv) {
 
         auto codec_audio = parser.get<std::string>("codec-audio");
         auto codec_video = parser.get<std::string>("codec-video");
-        transcode(i, o, to_ctr, codec_audio, codec_video);
+
+        try {
+            transcode(i, o, to_ctr, codec_audio, codec_video);
+        } catch (const std::exception& ex) {
+            std::cerr << "Caught exception when transcoding: " << ex.what() << std::endl;
+        }
     }
     return 0;
 }
