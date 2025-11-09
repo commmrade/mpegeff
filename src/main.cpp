@@ -1,5 +1,5 @@
-#include "transcode.hpp"
-#include "remux.hpp"
+#include "algos/transcode.hpp"
+#include "algos/remux.hpp"
 #include "argparse/argparse.hpp"
 #include <exception>
 
